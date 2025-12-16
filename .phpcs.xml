@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<ruleset name="Gimnasio MVC">
+    <description>Coding standard para el proyecto Gimnasio</description>
+    
+    <!-- Directorios a analizar -->
+    <file>config</file>
+    <file>models</file>
+    <file>controllers</file>
+    <file>public/index.php</file>
+    
+    <!-- Excluir directorios -->
+    <exclude-pattern>*/vendor/*</exclude-pattern>
+    <exclude-pattern>*/node_modules/*</exclude-pattern>
+    
+    <!-- Estándar a usar -->
+    <rule ref="PSR12"/>
+    
+    <!-- Configuraciones adicionales -->
+    <arg name="extensions" value="php"/>
+    <arg name="colors"/>
+    <arg name="report" value="full"/>
+</ruleset>
+

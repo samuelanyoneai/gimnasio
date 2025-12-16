@@ -1,0 +1,39 @@
+# Archivos de configuración con datos sensibles
+#config/database.php
+
+# Composer
+/vendor/
+composer.lock
+
+# PHPUnit
+phpunit.xml
+.phpunit.result.cache
+
+# PHPStan
+.phpstan/
+
+# Build artifacts
+deploy/
+deploy.tar.gz
+build-report.md
+security-report.md
+security-audit.json
+
+# Archivos del sistema operativo
+.DS_Store
+Thumbs.db
+
+# Archivos de IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Archivos temporales
+*.tmp
+*.temp
+

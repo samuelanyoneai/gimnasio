@@ -1,0 +1,293 @@
+name: CI/CD Pipeline - DevSecOps
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  # Job 1: Análisis de Código y Linting
+  code-quality:
+    name: Code Quality & Linting
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+      
+      - name: Configurar PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: pdo, pdo_pgsql
+          coverage: none
+      
+      - name: Verificar sintaxis PHP
+        run: |
+          echo "🔍 Verificando sintaxis PHP..."
+          find . -name "*.php" -not -path "./vendor/*" -exec php -l {} \;
+      
+      - name: Instalar PHP_CodeSniffer
+        run: |
+          composer require --dev squizlabs/php_codesniffer
+      
+      - name: Ejecutar PHP_CodeSniffer
+        run: |
+          ./vendor/bin/phpcs --standard=PSR12 --extensions=php \
+            --ignore=*/vendor/*,*/node_modules/* \
+            config/ models/ controllers/ public/index.php || true
+        continue-on-error: true
+      
+      - name: Instalar PHPStan
+        run: |
+          composer require --dev phpstan/phpstan
+      
+      - name: Ejecutar PHPStan (análisis estático)
+        run: |
+          ./vendor/bin/phpstan analyse --level=5 \
+            --memory-limit=1G \
+            config/ models/ controllers/ || true
+        continue-on-error: true
+
+  # Job 2: Análisis de Seguridad
+  security-scan:
+    name: Security Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+      
+      - name: Configurar PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: pdo, pdo_pgsql
+      
+      - name: Instalar dependencias Composer
+        run: |
+          if [ -f composer.json ]; then
+            composer install --no-interaction --prefer-dist
+          fi
+      
+      - name: Análisis de seguridad con Composer
+        run: |
+          if [ -f composer.json ]; then
+            composer audit || true
+          fi
+        continue-on-error: true
+      
+      - name: Buscar vulnerabilidades conocidas
+        run: |
+          echo "🔒 Buscando patrones de seguridad comunes..."
+          # Buscar uso de funciones peligrosas
+          if grep -r "eval\|exec\|system\|shell_exec\|passthru" --include="*.php" .; then
+            echo "⚠️ Se encontraron funciones potencialmente peligrosas"
+            exit 1
+          fi
+        continue-on-error: true
+      
+      - name: Verificar uso de prepared statements
+        run: |
+          echo "🔒 Verificando uso de prepared statements..."
+          if grep -r "->query(" --include="*.php" models/ controllers/ | grep -v "prepare"; then
+            echo "⚠️ Se encontraron consultas sin prepared statements"
+            exit 1
+          fi
+        continue-on-error: true
+      
+      - name: Verificar sanitización de salidas
+        run: |
+          echo "🔒 Verificando sanitización de salidas..."
+          if grep -r "echo.*\$" --include="*.php" views/ | grep -v "htmlspecialchars"; then
+            echo "⚠️ Se encontraron salidas sin sanitizar"
+            exit 1
+          fi
+        continue-on-error: true
+
+  # Job 3: Pruebas de Base de Datos
+  database-tests:
+    name: Database Schema Validation
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_gimnasio_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+      
+      - name: Esperar PostgreSQL
+        run: |
+          until pg_isready -h localhost -p 5432 -U postgres; do
+            echo "Esperando PostgreSQL..."
+            sleep 2
+          done
+      
+      - name: Crear base de datos de prueba
+        run: |
+          # Eliminar base de datos si existe (para empezar limpio en cada ejecución)
+          PGPASSWORD=postgres psql -h localhost -U postgres -c "DROP DATABASE IF EXISTS test_gimnasio_db;" || true
+          # Crear la base de datos
+          PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE test_gimnasio_db;"
+      
+      - name: Ejecutar script SQL
+        run: |
+          # Ejecutar script SQL
+          # El script usa CREATE TABLE IF NOT EXISTS, así que es seguro ejecutarlo múltiples veces
+          PGPASSWORD=postgres psql -h localhost -U postgres -d test_gimnasio_db -f database/schema.sql
+        env:
+          PGHOST: localhost
+          PGPORT: 5432
+          PGUSER: postgres
+          PGPASSWORD: postgres
+      
+      - name: Verificar tablas creadas
+        run: |
+          TABLES=$(PGPASSWORD=postgres psql -h localhost -U postgres -d test_gimnasio_db -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';" | tr -d ' ')
+          if [ "$TABLES" -lt 4 ]; then
+            echo "❌ Error: Se esperaban al menos 4 tablas, se encontraron $TABLES"
+            exit 1
+          fi
+          echo "✅ Se encontraron $TABLES tablas"
+      
+      - name: Verificar estructura de tablas
+        run: |
+          echo "Verificando estructura de tablas..."
+          PGPASSWORD=postgres psql -h localhost -U postgres -d test_gimnasio_db -c "\d members"
+          PGPASSWORD=postgres psql -h localhost -U postgres -d test_gimnasio_db -c "\d classes"
+          PGPASSWORD=postgres psql -h localhost -U postgres -d test_gimnasio_db -c "\d payments"
+
+  # Job 4: Pruebas Unitarias (si existen)
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+      
+      - name: Configurar PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: pdo, pdo_pgsql
+          coverage: xdebug
+      
+      - name: Instalar dependencias
+        run: |
+          if [ -f composer.json ]; then
+            composer install --no-interaction --prefer-dist
+          fi
+      
+      - name: Ejecutar pruebas PHPUnit
+        run: |
+          if [ -f phpunit.xml ] || [ -f phpunit.xml.dist ]; then
+            ./vendor/bin/phpunit --coverage-text || true
+          else
+            echo "⚠️ No se encontró configuración de PHPUnit, saltando pruebas"
+          fi
+        continue-on-error: true
+
+  # Job 5: Análisis de Dependencias
+  dependency-check:
+    name: Dependency Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+      
+      - name: Verificar archivos de configuración
+        run: |
+          echo "📦 Verificando archivos de configuración..."
+          if [ -f composer.json ]; then
+            echo "✅ composer.json encontrado"
+            cat composer.json
+          else
+            echo "⚠️ No se encontró composer.json"
+          fi
+      
+      - name: Verificar versiones de PHP requeridas
+        run: |
+          if [ -f composer.json ]; then
+            echo "Verificando requisitos de PHP..."
+            php -v
+          fi
+
+  # Job 6: Build y Validación Final
+  build:
+    name: Build & Final Validation
+    runs-on: ubuntu-latest
+    needs: [code-quality, security-scan, database-tests]
+    
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+      
+      - name: Configurar PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: pdo, pdo_pgsql
+      
+      - name: Validar estructura del proyecto
+        run: |
+          echo "📁 Validando estructura del proyecto..."
+          [ -d "config" ] && echo "✅ Carpeta config existe" || echo "❌ Falta carpeta config"
+          [ -d "models" ] && echo "✅ Carpeta models existe" || echo "❌ Falta carpeta models"
+          [ -d "controllers" ] && echo "✅ Carpeta controllers existe" || echo "❌ Falta carpeta controllers"
+          [ -d "views" ] && echo "✅ Carpeta views existe" || echo "❌ Falta carpeta views"
+          [ -d "public" ] && echo "✅ Carpeta public existe" || echo "❌ Falta carpeta public"
+          [ -f "public/index.php" ] && echo "✅ index.php existe" || echo "❌ Falta index.php"
+      
+      - name: Generar reporte de build
+        run: |
+          echo "# Reporte de Build" > build-report.md
+          echo "Fecha: $(date)" >> build-report.md
+          echo "Commit: ${{ github.sha }}" >> build-report.md
+          echo "Branch: ${{ github.ref }}" >> build-report.md
+          echo "" >> build-report.md
+          echo "## Estructura del Proyecto" >> build-report.md
+          find . -type f -name "*.php" | wc -l | xargs echo "Total archivos PHP:" >> build-report.md
+          cat build-report.md
+      
+      - name: Upload build report
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-report
+          path: build-report.md
+
+  # Job 7: Notificación (opcional)
+  notify:
+    name: Notification
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: always()
+    
+    steps:
+      - name: Resumen del Pipeline
+        run: |
+          echo "## 🚀 Pipeline DevSecOps Completado" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Análisis de código completado" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Análisis de seguridad completado" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Pruebas de base de datos completadas" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Build validado" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+

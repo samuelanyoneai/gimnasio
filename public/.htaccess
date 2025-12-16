@@ -1,0 +1,18 @@
+# Configuración Apache para el proyecto
+# Este archivo permite URLs limpias y redirige todas las peticiones a index.php
+
+RewriteEngine On
+
+# Si el archivo o directorio existe, servirlo directamente
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+
+# Redirigir todo lo demás a index.php
+RewriteRule ^(.*)$ index.php [QSA,L]
+
+# Prevenir acceso directo a archivos de configuración
+<FilesMatch "^(config|models|controllers|views)">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
